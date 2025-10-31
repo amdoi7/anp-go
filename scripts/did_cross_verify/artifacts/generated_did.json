@@ -1,0 +1,32 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/did/v1",
+    "https://w3id.org/security/suites/jws-2020/v1",
+    "https://w3id.org/security/suites/secp256k1-2019/v1"
+  ],
+  "id": "did:wba:cross-verify.agent-network:agents:cross",
+  "verificationMethod": [
+    {
+      "id": "did:wba:cross-verify.agent-network:agents:cross#key-1",
+      "type": "EcdsaSecp256k1VerificationKey2019",
+      "controller": "did:wba:cross-verify.agent-network:agents:cross",
+      "publicKeyJwk": {
+        "kty": "EC",
+        "crv": "secp256k1",
+        "x": "5TtqDuRnTh8tYmdiSLQLaBjAIphrtxS8ddbyCsITfuk",
+        "y": "MnB40dBDuKXI55OQbPwX5wRvhaMNSqwPT8dRdsO7YIQ",
+        "kid": "G054IOz1g9N_tOrDuGj8Wv9sV663hkIg7AQda6iCsKA"
+      }
+    }
+  ],
+  "authentication": [
+    "did:wba:cross-verify.agent-network:agents:cross#key-1"
+  ],
+  "service": [
+    {
+      "id": "did:wba:cross-verify.agent-network:agents:cross#ad",
+      "type": "AgentDescription",
+      "serviceEndpoint": "https://cross-verify.agent-network/agents/cross"
+    }
+  ]
+}

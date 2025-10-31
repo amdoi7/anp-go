@@ -1,0 +1,5 @@
+# ANP 中间产物交叉验证依赖
+deepdiff>=6.0.0      # 深度对比工具
+jsonschema>=4.0.0    # JSON schema 验证
+pytest>=7.0.0        # 测试框架
+colorama>=0.4.0      # 彩色输出

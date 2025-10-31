@@ -1,0 +1,7 @@
+# Cross-language verification dependencies
+# Run with: uv run --no-project python verify.py
+
+[tool.uv]
+sources = [
+    { workspace = true }
+]

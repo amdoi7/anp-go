@@ -1,0 +1,3 @@
+{
+  "auth_header": "DIDWba did=\"did:wba:cross-verify.agent-network:agents:cross\", nonce=\"30578cc7-d163-422a-adfc-721edb88151b\", timestamp=\"2025-10-30T05:28:25Z\", verification_method=\"key-1\", signature=\"Es2LIe7JrwNdophpS64T9SroV7XCxrho2CWRCH43NO4Z0JiNdjr7a7tb2iwGz_F0P4-ZS45z_xlo2Zi0-3UbaQ\""
+}

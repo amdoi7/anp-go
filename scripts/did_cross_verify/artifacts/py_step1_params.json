@@ -1,0 +1,8 @@
+{
+  "did": "did:wba:cross-verify.agent-network:agents:cross",
+  "nonce": "6e9d5d7157434da2a86ec2bee8192754",
+  "timestamp": "2025-10-30T05:28:26Z",
+  "verification_method": "key-1",
+  "verification_method_id": "did:wba:cross-verify.agent-network:agents:cross#key-1",
+  "service_domain": "test.example.com"
+}
