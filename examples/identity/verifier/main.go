@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"anp/anp_auth"
+	"github.com/openanp/anp-go/anp_auth"
 )
 
 func main() {
@@ -35,10 +35,9 @@ func main() {
 		privatePath = filepath.Join(wd, privatePath)
 	}
 
-	auth, err := anp_auth.NewAuthenticator(anp_auth.Config{
-		DIDDocumentPath: didDocPath,
-		PrivateKeyPath:  privatePath,
-	})
+	auth, err := anp_auth.NewAuthenticator(
+		anp_auth.WithDIDCfgPaths(didDocPath, privatePath),
+	)
 	if err != nil {
 		log.Fatalf("create authenticator: %v", err)
 	}

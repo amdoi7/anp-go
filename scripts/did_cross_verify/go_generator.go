@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"anp/anp_auth"
-	"anp/crypto"
+	"github.com/openanp/anp-go/anp_auth"
+	"github.com/openanp/anp-go/crypto"
 
 	"github.com/bytedance/sonic"
 	"github.com/cyberphone/json-canonicalization/go/src/webpki.org/jsoncanonicalizer"

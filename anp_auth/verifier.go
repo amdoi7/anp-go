@@ -9,41 +9,27 @@ import (
 	"time"
 )
 
-// DidWbaVerifierError represents a domain error with an HTTP-like status code.
-type DidWbaVerifierError struct {
-	Message    string
-	StatusCode int
-}
-
-func (e *DidWbaVerifierError) Error() string {
-	return e.Message
-}
+// Removed: DidWbaVerifierError (use ErrorWithStatus and sentinel errors instead)
 
 // DidWbaVerifierConfig holds the configuration for the DidWbaVerifier.
 type DidWbaVerifierConfig struct {
-	JWTPrivateKey              any
-	JWTPublicKey               any
-	JWTPrivateKeyPEM           []byte
-	JWTPublicKeyPEM            []byte
-	JWTAlgorithm               string
-	AccessTokenExpireMinutes   time.Duration
-	NonceExpirationMinutes     time.Duration
-	TimestampExpirationMinutes time.Duration
-	DIDCacheExpireMinutes      time.Duration
-	AllowedDomains             []string
-	ExternalNonceValidator     NonceValidatorFunc
-	ResolveDIDDocumentFunc     ResolveDIDDocumentFunc
-	NowFunc                    func() time.Time
-	HTTPClient                 *http.Client
+	JWTPrivateKey         any
+	JWTPublicKey          any
+	JWTPrivateKeyPEM      []byte
+	JWTPublicKeyPEM       []byte
+	JWTAlgorithm          string
+	AccessTokenExpiration time.Duration
+	TimestampExpiration   time.Duration
+	DIDCacheExpiration    time.Duration
+	AllowedDomains        []string
+	NonceValidator        NonceValidator
+	ResolveDIDDocument    ResolveDIDDocumentFunc
+	Now                   func() time.Time
+	HTTPClient            *http.Client
 }
 
 // ResolveDIDDocumentFunc resolves a DID document for a given DID identifier.
 type ResolveDIDDocumentFunc func(ctx context.Context, did string) (*DIDWBADocument, error)
-
-// NonceValidatorFunc allows plugging in custom nonce validation logic.
-// Returning (false, nil) indicates the nonce is invalid. Any non-nil error
-// will be surfaced to the caller.
-type NonceValidatorFunc func(ctx context.Context, did, nonce string) (bool, error)
 
 // didCacheEntry stores a cached DID document with its expiration time.
 type didCacheEntry struct {
@@ -53,37 +39,36 @@ type didCacheEntry struct {
 
 // DidWbaVerifier verifies Authorization headers for DID WBA and Bearer JWT.
 type DidWbaVerifier struct {
-	config            DidWbaVerifierConfig
-	validServerNonces map[string]time.Time
-	nonceMutex        sync.Mutex
-	didCache          map[string]didCacheEntry
-	didCacheMutex     sync.Mutex
-	now               func() time.Time
+	config        DidWbaVerifierConfig
+	didCache      map[string]didCacheEntry
+	didCacheMutex sync.Mutex
+	now           func() time.Time
 }
 
 // NewDidWbaVerifier creates a new verifier with the given configuration.
-// It applies sensible defaults if some config fields are omitted.
+// NonceValidator is required to prevent replay attacks.
 func NewDidWbaVerifier(config DidWbaVerifierConfig) (*DidWbaVerifier, error) {
+	if config.NonceValidator == nil {
+		return nil, ErrNonceValidatorMissing
+	}
+
 	if config.JWTAlgorithm == "" {
-		config.JWTAlgorithm = "RS256"
+		config.JWTAlgorithm = DefaultJWTAlgorithm
 	}
-	if config.AccessTokenExpireMinutes == 0 {
-		config.AccessTokenExpireMinutes = 60
+	if config.AccessTokenExpiration == 0 {
+		config.AccessTokenExpiration = DefaultAccessTokenExpiration
 	}
-	if config.NonceExpirationMinutes == 0 {
-		config.NonceExpirationMinutes = 6
+	if config.TimestampExpiration == 0 {
+		config.TimestampExpiration = DefaultTimestampExpiration
 	}
-	if config.TimestampExpirationMinutes == 0 {
-		config.TimestampExpirationMinutes = 5
-	}
-	if config.DIDCacheExpireMinutes == 0 {
-		config.DIDCacheExpireMinutes = 15
+	if config.DIDCacheExpiration == 0 {
+		config.DIDCacheExpiration = DefaultDIDCacheExpiration
 	}
 
 	if config.JWTPrivateKey == nil && len(config.JWTPrivateKeyPEM) > 0 {
 		key, err := LoadJWTPrivateKeyFromPEM(config.JWTPrivateKeyPEM)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load JWT private key: %w", err)
+			return nil, fmt.Errorf("loading JWT private key: %w", err)
 		}
 		config.JWTPrivateKey = key
 	}
@@ -91,21 +76,19 @@ func NewDidWbaVerifier(config DidWbaVerifierConfig) (*DidWbaVerifier, error) {
 	if config.JWTPublicKey == nil && len(config.JWTPublicKeyPEM) > 0 {
 		key, err := LoadJWTPublicKeyFromPEM(config.JWTPublicKeyPEM)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load JWT public key: %w", err)
+			return nil, fmt.Errorf("loading JWT public key: %w", err)
 		}
 		config.JWTPublicKey = key
 	}
 
-	nowFunc := config.NowFunc
-	if nowFunc == nil {
-		nowFunc = time.Now
+	if config.Now == nil {
+		config.Now = time.Now
 	}
 
 	return &DidWbaVerifier{
-		config:            config,
-		validServerNonces: make(map[string]time.Time),
-		didCache:          make(map[string]didCacheEntry),
-		now:               nowFunc,
+		config:   config,
+		didCache: make(map[string]didCacheEntry),
+		now:      config.Now,
 	}, nil
 }
 
@@ -120,7 +103,7 @@ func (v *DidWbaVerifier) ensureDomainAllowed(domain string) error {
 		}
 	}
 
-	return &DidWbaVerifierError{fmt.Sprintf("Domain not allowed: %s", domain), 403}
+	return NewErrorWithStatus(fmt.Errorf("%w: %s", ErrDomainNotAllowed, domain), StatusForbidden)
 }
 
 // VerifyAuthHeader verifies an HTTP Authorization header.
@@ -132,10 +115,10 @@ func (v *DidWbaVerifier) VerifyAuthHeader(authorization, domain string) (map[str
 // VerifyAuthHeaderContext is the context-aware variant of VerifyAuthHeader.
 func (v *DidWbaVerifier) VerifyAuthHeaderContext(ctx context.Context, authorization, domain string) (map[string]any, error) {
 	if authorization == "" {
-		return nil, &DidWbaVerifierError{"Missing authorization header", 401}
+		return nil, NewErrorWithStatus(ErrMissingAuthHeader, StatusUnauthorized)
 	}
 
-	if strings.HasPrefix(authorization, "Bearer ") {
+	if strings.HasPrefix(authorization, BearerScheme) {
 		return v.handleBearerAuth(authorization)
 	}
 
@@ -143,14 +126,14 @@ func (v *DidWbaVerifier) VerifyAuthHeaderContext(ctx context.Context, authorizat
 }
 
 func (v *DidWbaVerifier) handleBearerAuth(authorization string) (map[string]any, error) {
-	tokenString := strings.TrimPrefix(authorization, "Bearer ")
+	tokenString := strings.TrimPrefix(authorization, BearerScheme)
 	if v.config.JWTPublicKey == nil {
-		return nil, &DidWbaVerifierError{"JWT public key not configured", 500}
+		return nil, NewErrorWithStatus(ErrJWTConfigMissing, StatusInternalServerError)
 	}
 
 	did, err := VerifyAccessToken(tokenString, v.config.JWTPublicKey, v.config.JWTAlgorithm)
 	if err != nil {
-		return nil, &DidWbaVerifierError{fmt.Sprintf("Invalid token: %v", err), 401}
+		return nil, NewErrorWithStatus(WrapAuthError(ErrInvalidToken, "verify access token", err), StatusUnauthorized)
 	}
 
 	return map[string]any{"did": did}, nil
@@ -163,7 +146,7 @@ func (v *DidWbaVerifier) handleDidAuth(ctx context.Context, authorization, domai
 
 	headerParts, err := parseAuthHeader(authorization)
 	if err != nil {
-		return nil, &DidWbaVerifierError{fmt.Sprintf("Invalid authorization header: %v", err), 401}
+		return nil, NewErrorWithStatus(WrapAuthError(ErrInvalidAuthHeader, "parse auth header", err), StatusUnauthorized)
 	}
 
 	if err := v.verifyTimestamp(headerParts.Timestamp); err != nil {
@@ -176,21 +159,21 @@ func (v *DidWbaVerifier) handleDidAuth(ctx context.Context, authorization, domai
 
 	didDocument, err := v.resolveAndCacheDID(ctx, headerParts.DID)
 	if err != nil {
-		return nil, err // Error is already wrapped by the resolver
+		return nil, err
 	}
 
 	isValid, message := v.verifySignature(authorization, didDocument, domain)
 	if !isValid {
-		return nil, &DidWbaVerifierError{fmt.Sprintf("Invalid signature: %s", message), 403}
+		return nil, NewErrorWithStatus(fmt.Errorf("%w: %s", ErrInvalidSignature, message), StatusForbidden)
 	}
 
 	if v.config.JWTPrivateKey == nil {
-		return nil, &DidWbaVerifierError{"JWT private key not configured for token issuance", 500}
+		return nil, NewErrorWithStatus(ErrJWTConfigMissing, StatusInternalServerError)
 	}
 
-	accessToken, err := CreateAccessToken(headerParts.DID, v.config.JWTPrivateKey, v.config.JWTAlgorithm, v.config.AccessTokenExpireMinutes*time.Minute)
+	accessToken, err := CreateAccessToken(headerParts.DID, v.config.JWTPrivateKey, v.config.JWTAlgorithm, v.config.AccessTokenExpiration)
 	if err != nil {
-		return nil, &DidWbaVerifierError{fmt.Sprintf("Failed to create access token: %v", err), 500}
+		return nil, NewErrorWithStatus(WrapAuthError(ErrTokenCreation, "create access token", err), StatusInternalServerError)
 	}
 
 	return map[string]any{
@@ -209,8 +192,7 @@ func (v *DidWbaVerifier) resolveAndCacheDID(ctx context.Context, did string) (*D
 	}
 	v.didCacheMutex.Unlock()
 
-	// Resolve outside the lock to prevent blocking during network I/O.
-	resolver := v.config.ResolveDIDDocumentFunc
+	resolver := v.config.ResolveDIDDocument
 	var doc *DIDWBADocument
 	var err error
 	if resolver != nil {
@@ -219,21 +201,19 @@ func (v *DidWbaVerifier) resolveAndCacheDID(ctx context.Context, did string) (*D
 		doc, err = ResolveDIDWBADocument(did, v.config.HTTPClient)
 	}
 	if err != nil {
-		return nil, &DidWbaVerifierError{fmt.Sprintf("Failed to resolve DID document: %v", err), 401}
+		return nil, NewErrorWithStatus(WrapAuthError(ErrDIDResolution, "resolve DID document", err), StatusUnauthorized)
 	}
 
-	// Lock again to update the cache.
 	v.didCacheMutex.Lock()
 	defer v.didCacheMutex.Unlock()
 
-	// Re-check in case another goroutine resolved it while we were working.
 	if entry, exists := v.didCache[did]; exists && v.now().UTC().Before(entry.expiresAt) {
 		return entry.doc, nil
 	}
 
 	v.didCache[did] = didCacheEntry{
 		doc:       doc,
-		expiresAt: v.now().UTC().Add(v.config.DIDCacheExpireMinutes * time.Minute),
+		expiresAt: v.now().UTC().Add(v.config.DIDCacheExpiration),
 	}
 
 	return doc, nil
@@ -242,49 +222,29 @@ func (v *DidWbaVerifier) resolveAndCacheDID(ctx context.Context, did string) (*D
 func (v *DidWbaVerifier) verifyTimestamp(timestampStr string) error {
 	requestTime, err := time.Parse(time.RFC3339, timestampStr)
 	if err != nil {
-		return &DidWbaVerifierError{fmt.Sprintf("Invalid timestamp format: %v", err), 400}
+		return NewErrorWithStatus(WrapAuthError(ErrTimestampInvalid, "parse timestamp", err), StatusBadRequest)
 	}
 
 	currentTime := v.now().UTC()
-	if requestTime.After(currentTime.Add(1 * time.Minute)) {
-		return &DidWbaVerifierError{"Timestamp is in the future", 400}
+	if requestTime.After(currentTime.Add(DefaultTimestampTolerance)) {
+		return NewErrorWithStatus(ErrTimestampFuture, StatusBadRequest)
 	}
 
-	if currentTime.Sub(requestTime) > v.config.TimestampExpirationMinutes*time.Minute {
-		return &DidWbaVerifierError{"Timestamp expired", 401}
+	if currentTime.Sub(requestTime) > v.config.TimestampExpiration {
+		return NewErrorWithStatus(ErrTimestampExpired, StatusUnauthorized)
 	}
 
 	return nil
 }
 
 func (v *DidWbaVerifier) verifyNonce(ctx context.Context, did, nonce string) error {
-	if v.config.ExternalNonceValidator != nil {
-		ok, err := v.config.ExternalNonceValidator(ctx, did, nonce)
-		if err != nil {
-			return &DidWbaVerifierError{fmt.Sprintf("Nonce validator error: %v", err), 500}
-		}
-		if !ok {
-			return &DidWbaVerifierError{"Invalid or expired nonce", 401}
-		}
-		return nil
+	ok, err := v.config.NonceValidator.Validate(ctx, did, nonce)
+	if err != nil {
+		return NewErrorWithStatus(WrapAuthError(ErrNonceValidatorFailure, "validate nonce", err), StatusInternalServerError)
 	}
-
-	v.nonceMutex.Lock()
-	defer v.nonceMutex.Unlock()
-
-	currentTime := v.now().UTC()
-	// Clean up expired nonces
-	for n, t := range v.validServerNonces {
-		if currentTime.Sub(t) > v.config.NonceExpirationMinutes*time.Minute {
-			delete(v.validServerNonces, n)
-		}
+	if !ok {
+		return NewErrorWithStatus(ErrNonceInvalid, StatusUnauthorized)
 	}
-
-	if _, exists := v.validServerNonces[nonce]; exists {
-		return &DidWbaVerifierError{"Nonce already used", 401}
-	}
-
-	v.validServerNonces[nonce] = currentTime
 	return nil
 }
 

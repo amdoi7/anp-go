@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"anp/crypto"
+	"github.com/openanp/anp-go/crypto"
 
 	"github.com/bytedance/sonic"
 )
@@ -35,21 +35,18 @@ func (v *EcdsaSecp256k1VerificationKey2019) GetPublicKey() any {
 func (v *EcdsaSecp256k1VerificationKey2019) VerifySignature(content []byte, signature string) bool {
 	sigBytes, err := base64.RawURLEncoding.DecodeString(signature)
 	if err != nil {
-		logger.Error("failed to decode signature from base64url", "error", err)
+		// Signature decode failed, verification fails
 		return false
 	}
 
 	r, s, err := unmarshalSignature(v.PublicKey.Curve, sigBytes)
 	if err != nil {
-		logger.Error("failed to unmarshal signature", "error", err)
+		// Signature unmarshal failed, verification fails
 		return false
 	}
 
-	// Match Python's behaviour where a SHA-256 digest is passed into
-	// ECDSA(SHA256), effectively verifying against SHA256(SHA256(payload)).
 	digest := sha256.Sum256(content)
-	finalDigest := sha256.Sum256(digest[:])
-	return ecdsa.Verify(v.PublicKey, finalDigest[:], r, s)
+	return ecdsa.Verify(v.PublicKey, digest[:], r, s)
 }
 
 // NewEcdsaSecp256k1VerificationKey2019 creates an instance from a verification method map.
@@ -68,7 +65,7 @@ func NewEcdsaSecp256k1VerificationKey2019(methodMap map[string]any) (Verificatio
 		return nil, fmt.Errorf("failed to unmarshal publicKeyJwk: %w", err)
 	}
 
-	if jwk.Kty != "EC" || jwk.Crv != "secp256k1" {
+	if jwk.Kty != JWKTypeEC || jwk.Crv != JWKCurveSecp256k1 {
 		return nil, fmt.Errorf("unsupported JWK parameters for secp256k1: kty=%s, crv=%s", jwk.Kty, jwk.Crv)
 	}
 
@@ -95,7 +92,7 @@ func NewEcdsaSecp256k1VerificationKey2019(methodMap map[string]any) (Verificatio
 
 // VerificationMethodFactory is a map of verification method types to their constructor functions.
 var VerificationMethodFactory = map[string]func(map[string]any) (VerificationMethod, error){
-	"EcdsaSecp256k1VerificationKey2019": NewEcdsaSecp256k1VerificationKey2019,
+	VerificationMethodEcdsaSecp256k1: NewEcdsaSecp256k1VerificationKey2019,
 }
 
 // CreateVerificationMethod creates a VerificationMethod instance based on the method type.

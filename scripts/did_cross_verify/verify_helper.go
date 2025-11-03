@@ -8,7 +8,7 @@ import (
 	"os"
 	"regexp"
 
-	"anp/anp_auth"
+	"github.com/openanp/anp-go/anp_auth"
 )
 
 type headerArtifact struct {

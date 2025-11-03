@@ -4,7 +4,6 @@
 package anp_auth
 
 import (
-	"anp/crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -12,6 +11,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/openanp/anp-go/crypto"
 	"io"
 	"math/big"
 	"net"
@@ -71,15 +71,15 @@ func CreateDIDWBADocument(hostname string, port *int, pathSegments []string, age
 
 	doc := &DIDWBADocument{
 		Context: []string{
-			"https://www.w3.org/ns/did/v1",
-			"https://w3id.org/security/suites/jws-2020/v1",
-			"https://w3id.org/security/suites/secp256k1-2019/v1",
+			ContextDIDV1,
+			ContextJWS2020,
+			ContextSecp256k12019,
 		},
 		ID: did,
 		VerificationMethod: []map[string]any{
 			{
 				"id":           verificationMethodID,
-				"type":         "EcdsaSecp256k1VerificationKey2019",
+				"type":         VerificationMethodEcdsaSecp256k1,
 				"controller":   did,
 				"publicKeyJwk": buildPublicKeyJWK(&privateKey.PublicKey),
 			},
@@ -89,8 +89,8 @@ func CreateDIDWBADocument(hostname string, port *int, pathSegments []string, age
 
 	if agentDescriptionURL != nil {
 		doc.Service = []Service{{
-			ID:              fmt.Sprintf("%s#ad", did),
-			Type:            "AgentDescription",
+			ID:              fmt.Sprintf("%s#%s", did, AgentDescriptionFragment),
+			Type:            ServiceTypeAgentDescription,
 			ServiceEndpoint: *agentDescriptionURL,
 		}}
 	}
@@ -103,7 +103,7 @@ func buildDID(hostname string, port *int, pathSegments []string) (string, error)
 		return "", fmt.Errorf("hostname cannot be empty")
 	}
 
-	didBase := fmt.Sprintf("did:wba:%s", hostname)
+	didBase := fmt.Sprintf("%s%s", DIDPrefix, hostname)
 	if port != nil {
 		encodedPort := url.PathEscape(fmt.Sprintf(":%d", *port))
 		didBase += encodedPort
@@ -170,8 +170,8 @@ func ResolveDIDWBADocument(did string, httpClient ...*http.Client) (*DIDWBADocum
 }
 
 var didToURL = func(did string) (string, error) {
-	if !strings.HasPrefix(did, "did:wba:") {
-		return "", fmt.Errorf("invalid DID format: must start with 'did:wba:'")
+	if !strings.HasPrefix(did, DIDPrefix) {
+		return "", fmt.Errorf("invalid DID format: must start with '%s'", DIDPrefix)
 	}
 
 	parts := strings.SplitN(did, ":", 4)
@@ -184,9 +184,9 @@ var didToURL = func(did string) (string, error) {
 		return "", fmt.Errorf("failed to unescape domain: %w", err)
 	}
 
-	path := "/.well-known/did.json"
+	path := WellKnownDIDPath
 	if len(parts) > 3 {
-		path = "/" + strings.ReplaceAll(parts[3], ":", "/") + "/did.json"
+		path = "/" + strings.ReplaceAll(parts[3], ":", "/") + "/" + DIDDocumentFilename
 	}
 
 	return fmt.Sprintf("https://%s%s", domain, path), nil
@@ -232,7 +232,7 @@ func GenerateAuthHeader(privateKey *ecdsa.PrivateKey, doc *DIDWBADocument, servi
 
 	// Ensure the selected method is appropriate
 	methodType, _ := methodMap["type"].(string)
-	if methodType != "EcdsaSecp256k1VerificationKey2019" {
+	if methodType != VerificationMethodEcdsaSecp256k1 {
 		return nil, fmt.Errorf("unsupported verification method type for signing: %s", methodType)
 	}
 
@@ -277,7 +277,7 @@ func GenerateAuthJSON(privateKey *ecdsa.PrivateKey, doc *DIDWBADocument, service
 	}
 
 	methodType, _ := methodMap["type"].(string)
-	if methodType != "EcdsaSecp256k1VerificationKey2019" {
+	if methodType != VerificationMethodEcdsaSecp256k1 {
 		return nil, fmt.Errorf("unsupported verification method type for signing: %s", methodType)
 	}
 
@@ -450,18 +450,13 @@ func signPayload(privateKey *ecdsa.PrivateKey, payload *authPayload) (string, er
 
 	data, err := payload.marshal()
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal payload: %w", err)
+		return "", fmt.Errorf("marshaling payload: %w", err)
 	}
 
-	// Python implementation passes a SHA-256 digest into ECDSA(SHA256).
-	// cryptography re-hashes the provided digest internally, so the effective
-	// signing input becomes SHA256(SHA256(payload)). Mirror that here to remain
-	// interoperable with the Python SDK.
 	digest := sha256.Sum256(data)
-	finalDigest := sha256.Sum256(digest[:])
-	r, s, err := ecdsa.Sign(rand.Reader, privateKey, finalDigest[:])
+	r, s, err := ecdsa.Sign(rand.Reader, privateKey, digest[:])
 	if err != nil {
-		return "", fmt.Errorf("failed to sign payload: %w", err)
+		return "", fmt.Errorf("signing payload: %w", err)
 	}
 
 	return marshalSignature(privateKey.Curve, r, s)
@@ -509,8 +504,8 @@ func buildPublicKeyJWK(publicKey *ecdsa.PublicKey) JWK {
 	kid := base64.RawURLEncoding.EncodeToString(hashSHA256(compressed))
 
 	return JWK{
-		Kty: "EC",
-		Crv: "secp256k1",
+		Kty: JWKTypeEC,
+		Crv: JWKCurveSecp256k1,
 		X:   x,
 		Y:   y,
 		Kid: kid,

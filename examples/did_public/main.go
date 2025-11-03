@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"anp/anp_auth"
-	"anp/crypto"
+	"github.com/openanp/anp-go/anp_auth"
+	"github.com/openanp/anp-go/crypto"
 )
 
 func main() {

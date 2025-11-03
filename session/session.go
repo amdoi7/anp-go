@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"anp/anp_auth"
-	"anp/anp_crawler"
+	"github.com/openanp/anp-go/anp_auth"
+	"github.com/openanp/anp-go/anp_crawler"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
@@ -72,14 +72,12 @@ func New(cfg Config) (*Session, error) {
 		logger = slog.Default()
 	}
 	anp_crawler.SetLogger(logger)
-	anp_auth.SetLogger(logger)
 
 	authenticator := cfg.Authenticator
 	if authenticator == nil {
-		auth, err := anp_auth.NewAuthenticator(anp_auth.Config{
-			DIDDocumentPath: cfg.DIDDocumentPath,
-			PrivateKeyPath:  cfg.PrivateKeyPath,
-		})
+		auth, err := anp_auth.NewAuthenticator(
+			anp_auth.WithDIDCfgPaths(cfg.DIDDocumentPath, cfg.PrivateKeyPath),
+		)
 		if err != nil {
 			return nil, err
 		}

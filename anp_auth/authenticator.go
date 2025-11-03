@@ -2,7 +2,6 @@ package anp_auth
 
 import (
 	"crypto/ecdsa"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,14 +9,14 @@ import (
 	"strings"
 	"sync"
 
-	"anp/crypto"
-
 	"github.com/bytedance/sonic"
+	"github.com/openanp/anp-go/crypto"
+	"golang.org/x/sync/singleflight"
 )
 
 // Authenticator lazily loads DID material and issues DID-WBA authentication headers.
 type Authenticator struct {
-	cfg Config
+	cfg cfg // internal config for lazy loading
 
 	didDocument *DIDWBADocument
 	privateKey  *ecdsa.PrivateKey
@@ -27,33 +26,19 @@ type Authenticator struct {
 	tokens      map[string]string
 	authHeaders map[string]string
 	cacheMutex  sync.Mutex
+
+	// sf prevents thundering herd when multiple goroutines request headers
+	// for the same domain simultaneously
+	sf singleflight.Group
+
+	// logger is the injected logger instance
+	logger Logger
 }
 
-// Config controls how an Authenticator is created.
-type Config struct {
+// cfg holds internal configuration for lazy loading
+type cfg struct {
 	DIDDocumentPath string
 	PrivateKeyPath  string
-
-	Document   *DIDWBADocument
-	PrivateKey *ecdsa.PrivateKey
-}
-
-// NewAuthenticator constructs an Authenticator. When Document/PrivateKey are provided,
-// they are used directly; otherwise DIDDocumentPath and PrivateKeyPath must be set.
-func NewAuthenticator(cfg Config) (*Authenticator, error) {
-	if cfg.Document == nil || cfg.PrivateKey == nil {
-		if cfg.DIDDocumentPath == "" || cfg.PrivateKeyPath == "" {
-			return nil, errors.New("anp_auth: provide Document/PrivateKey or DIDDocumentPath/PrivateKeyPath")
-		}
-	}
-
-	return &Authenticator{
-		cfg:         cfg,
-		didDocument: cfg.Document,
-		privateKey:  cfg.PrivateKey,
-		tokens:      make(map[string]string),
-		authHeaders: make(map[string]string),
-	}, nil
 }
 
 // GenerateHeader returns the DID-WBA Authorization header for the target URL.
@@ -76,32 +61,56 @@ func (a *Authenticator) header(target string, force bool) (map[string]string, er
 		a.cacheMutex.Lock()
 		if token, ok := a.tokens[domain]; ok {
 			a.cacheMutex.Unlock()
-			logger.Debug("using cached JWT", "domain", domain)
-			return map[string]string{"Authorization": "Bearer " + token}, nil
+			a.logger.Debug("using cached JWT", "domain", domain)
+			return map[string]string{AuthorizationHeader: BearerScheme + token}, nil
 		}
 		if header, ok := a.authHeaders[domain]; ok {
 			a.cacheMutex.Unlock()
-			logger.Debug("using cached DIDWba header", "domain", domain)
-			return map[string]string{"Authorization": header}, nil
+			a.logger.Debug("using cached DIDWba header", "domain", domain)
+			return map[string]string{AuthorizationHeader: header}, nil
 		}
 		a.cacheMutex.Unlock()
 	}
 
-	if err := a.ensureMaterial(); err != nil {
-		return nil, fmt.Errorf("load authentication material: %w", err)
-	}
+	// Use singleflight to prevent thundering herd when multiple goroutines
+	// request the same domain simultaneously
+	result, err, _ := a.sf.Do(domain, func() (interface{}, error) {
+		// Double-check cache inside singleflight
+		if !force {
+			a.cacheMutex.Lock()
+			if token, ok := a.tokens[domain]; ok {
+				a.cacheMutex.Unlock()
+				return map[string]string{AuthorizationHeader: BearerScheme + token}, nil
+			}
+			if header, ok := a.authHeaders[domain]; ok {
+				a.cacheMutex.Unlock()
+				return map[string]string{AuthorizationHeader: header}, nil
+			}
+			a.cacheMutex.Unlock()
+		}
 
-	header, err := GenerateAuthHeader(a.privateKey, a.didDocument, domain)
+		if err := a.ensureMaterial(); err != nil {
+			return nil, fmt.Errorf("load authentication material: %w", err)
+		}
+
+		header, err := GenerateAuthHeader(a.privateKey, a.didDocument, domain)
+		if err != nil {
+			return nil, fmt.Errorf("generate header: %w", err)
+		}
+
+		headerString := header.String()
+		a.cacheMutex.Lock()
+		a.authHeaders[domain] = headerString
+		a.cacheMutex.Unlock()
+
+		return map[string]string{AuthorizationHeader: headerString}, nil
+	})
+
 	if err != nil {
-		return nil, fmt.Errorf("generate header: %w", err)
+		return nil, err
 	}
 
-	headerString := header.String()
-	a.cacheMutex.Lock()
-	a.authHeaders[domain] = headerString
-	a.cacheMutex.Unlock()
-
-	return map[string]string{"Authorization": headerString}, nil
+	return result.(map[string]string), nil
 }
 
 // GenerateJSON creates the DID-WBA JSON payload equivalent to the Authorization header.
@@ -118,19 +127,19 @@ func (a *Authenticator) GenerateJSON(target string) (*AuthJSON, error) {
 
 // UpdateFromResponse caches a bearer token returned by the server.
 func (a *Authenticator) UpdateFromResponse(target string, header http.Header) {
-	token := header.Get("Authorization")
-	if !strings.HasPrefix(token, "Bearer ") {
+	token := header.Get(AuthorizationHeader)
+	if !strings.HasPrefix(token, BearerScheme) {
 		return
 	}
 
 	domain, err := getDomain(target)
 	if err != nil {
-		logger.Warn("update token: invalid domain", "url", target, "error", err)
+		a.logger.Warn("update token: invalid domain", "url", target, "error", err)
 		return
 	}
 
 	a.cacheMutex.Lock()
-	a.tokens[domain] = strings.TrimPrefix(token, "Bearer ")
+	a.tokens[domain] = strings.TrimPrefix(token, BearerScheme)
 	a.cacheMutex.Unlock()
 }
 
@@ -138,7 +147,7 @@ func (a *Authenticator) UpdateFromResponse(target string, header http.Header) {
 func (a *Authenticator) ClearToken(target string) {
 	domain, err := getDomain(target)
 	if err != nil {
-		logger.Warn("clear token: invalid domain", "url", target, "error", err)
+		a.logger.Warn("clear token: invalid domain", "url", target, "error", err)
 		return
 	}
 	a.cacheMutex.Lock()

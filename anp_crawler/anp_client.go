@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"anp/anp_auth"
 	"github.com/bytedance/sonic"
+	"github.com/openanp/anp-go/anp_auth"
 )
 
 // Client describes the capabilities required by the crawler to retrieve ANP documents.

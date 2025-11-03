@@ -8,7 +8,7 @@ import (
 	"encoding/pem"
 	"fmt"
 
-	anpcrypto "anp/crypto"
+	anpcrypto "github.com/openanp/anp-go/crypto"
 
 	"github.com/golang-jwt/jwt/v5"
 )

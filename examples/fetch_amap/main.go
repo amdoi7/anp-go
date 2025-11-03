@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"anp/anp_crawler"
-	"anp/session"
+	"github.com/openanp/anp-go/anp_crawler"
+	"github.com/openanp/anp-go/session"
 )
 
 const (

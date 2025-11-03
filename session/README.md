@@ -62,7 +62,7 @@ import (
     "fmt"
     "golang.org/x/sync/errgroup"
     "golang.org/x/sync/semaphore"
-    "anp/session"
+    "github.com/openanp/anp-go/session"
 )
 
 func fetchMany(ctx context.Context, sess *session.Session, urls []string, limit int64) ([]*session.Document, error) {
@@ -104,4 +104,3 @@ func fetchMany(ctx context.Context, sess *session.Session, urls []string, limit 
 - 使用 `context` 控制超时/取消，任何一个请求失败都会取消剩余任务。
 - `semaphore` 控制最大并发数（默认 5）；也可换成 channel 或自定义池。
 - 保持库层同步接口，调用方可灵活组合，符合 KISS & YAGNI 思想。
-
